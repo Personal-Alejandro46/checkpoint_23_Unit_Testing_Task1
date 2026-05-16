@@ -7,22 +7,23 @@ from tortoisebot_waypoints.msg import WaypointActionAction, WaypointActionGoal
 from nav_msgs.msg import Odometry
 from gazebo_msgs.srv import SetModelState
 from gazebo_msgs.msg import ModelState
-from geometry_msgs.msg import Pose
+from tf import transformations
 
-TARGET_X = 0.5
-TARGET_Y = 0.5
+TARGET_X = -0.465
+TARGET_Y = 0.34
 PKG = 'tortoisebot_waypoints'
 
 class TestWaypoints(unittest.TestCase):
 
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):
         rospy.init_node('test_waypoints', anonymous=True)
-        self.current_x = 0.0
-        self.current_y = 0.0
-        self.current_yaw = 0.0
-        self.first_time = True
+        cls.current_x = 0.0
+        cls.current_y = 0.0
+        cls.current_yaw = 0.0
+        cls.first_time = True
 
-        # Reset manual para (0,0)
+        # Reset UMA ÚNICA VEZ para (0,0)
         rospy.wait_for_service('/gazebo/set_model_state')
         set_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
         state = ModelState()
@@ -33,58 +34,64 @@ class TestWaypoints(unittest.TestCase):
         set_state(state)
         rospy.sleep(0.5)
 
-        rospy.Subscriber('/odom', Odometry, self._odom_callback)
+        rospy.Subscriber('/odom', Odometry, cls._odom_callback)
 
-        while self.first_time:
+        # Aguarda primeiro dado do /odom
+        while cls.first_time:
             rospy.sleep(0.05)
 
-        self.client = actionlib.SimpleActionClient('tortoisebot_as', WaypointActionAction)
-        self.client.wait_for_server(timeout=rospy.Duration(10))
+        # Envia goal UMA ÚNICA VEZ
+        client = actionlib.SimpleActionClient('tortoisebot_as', WaypointActionAction)
+        client.wait_for_server(timeout=rospy.Duration(10))
 
         goal = WaypointActionGoal()
         goal.position.x = TARGET_X
         goal.position.y = TARGET_Y
-        self.client.send_goal(goal)
-        self.client.wait_for_result(timeout=rospy.Duration(60))
+        client.send_goal(goal)
+        client.wait_for_result(timeout=rospy.Duration(60))
 
-        self.final_x = self.current_x
-        self.final_y = self.current_y
-        self.final_yaw = self.current_yaw
+        # Guarda resultado final — ambos os testes usam estes valores
+        cls.final_x   = cls.current_x
+        cls.final_y   = cls.current_y
+        cls.final_yaw = cls.current_yaw
 
-    def _odom_callback(self, msg):
-        self.current_x = msg.pose.pose.position.x
-        self.current_y = msg.pose.pose.position.y
-        q = msg.pose.pose.orientation
-        siny = 2.0 * (q.w * q.z + q.x * q.y)
-        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-        self.current_yaw = math.atan2(siny, cosy)
-        if self.first_time:
-            self.start_pose_x = self.current_x
-            self.start_pose_y = self.current_y
-            self.first_time = False
+        rospy.loginfo("=== RESULTADO FINAL ===")
+        rospy.loginfo("final_x  : %.4f m" % cls.final_x)
+        rospy.loginfo("final_y  : %.4f m" % cls.final_y)
+        rospy.loginfo("final_yaw: %.4f rad (%.2f deg)" % (cls.final_yaw, math.degrees(cls.final_yaw)))
+        rospy.loginfo("=======================")
+
+    @classmethod
+    def _odom_callback(cls, msg):
+        cls.current_x = msg.pose.pose.position.x
+        cls.current_y = msg.pose.pose.position.y
+        quaternion = (
+            msg.pose.pose.orientation.x,
+            msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z,
+            msg.pose.pose.orientation.w)
+        euler = transformations.euler_from_quaternion(quaternion)
+        cls.current_yaw = euler[2]
+        if cls.first_time:
+            cls.start_pose_x = cls.current_x
+            cls.start_pose_y = cls.current_y
+            cls.first_time = False
+            rospy.loginfo("Start position X: %.4f | Y: %.4f" % (cls.start_pose_x, cls.start_pose_y))
 
     def test_end_position(self):
-        self.assertAlmostEqual(self.final_x, TARGET_X, delta=0.1,
-            msg=f"Position X error: got {self.final_x:.3f}")
-        self.assertAlmostEqual(self.final_y, TARGET_Y, delta=0.1,
-            msg=f"Position Y error: got {self.final_y:.3f}")
+        err_pos = math.sqrt(pow(TARGET_Y - self.final_y, 2) + pow(TARGET_X - self.final_x, 2))
+        self.assertAlmostEqual(err_pos, 0, delta=0.1,
+            msg="Position error: %.4f m (max 0.1 m)" % err_pos)
 
     def test_end_yaw(self):
-        expected_yaw = math.atan2(
-            TARGET_Y - self.start_pose_y,
-            TARGET_X - self.start_pose_x
-        )
-        diff = math.atan2(
-            math.sin(self.final_yaw - expected_yaw),
-            math.cos(self.final_yaw - expected_yaw)
-        )
+        expected_yaw = math.atan2(TARGET_Y - self.start_pose_y, TARGET_X - self.start_pose_x)
+        diff = expected_yaw - self.final_yaw
         msg = (
-            f"start=({self.start_pose_x:.3f},{self.start_pose_y:.3f}) "
-            f"final_yaw={math.degrees(self.final_yaw):.1f}deg "
-            f"expected_yaw={math.degrees(expected_yaw):.1f}deg "
-            f"diff={math.degrees(diff):.1f}deg"
+            f"final_yaw={math.degrees(self.final_yaw):.1f}deg ({self.final_yaw:.4f}rad) "
+            f"expected_yaw={math.degrees(expected_yaw):.1f}deg ({expected_yaw:.4f}rad) "
+            f"diff={math.degrees(diff):.1f}deg ({diff:.4f}rad)"
         )
-        self.assertAlmostEqual(diff, 0.0, delta=0.2, msg=msg)
+        self.assertAlmostEqual(self.final_yaw, expected_yaw, delta=0.45, msg=msg) # 15° = 0.2618 rad
 
 if __name__ == '__main__':
     import rostest

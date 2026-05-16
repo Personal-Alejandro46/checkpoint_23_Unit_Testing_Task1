@@ -71,15 +71,33 @@ class WaypointActionClass(object):
         err_pos = math.sqrt(pow(self._des_pos.y - self._position.y, 2) + pow(self._des_pos.x - self._position.x, 2))
         err_yaw = desired_yaw - self._yaw
 
+        rospy.loginfo("Position X: %.4f | Position Y: %.4f | Desired Yaw: %.4f rad (%.2f deg)" % (
+            self._position.x,
+            self._position.y,
+            desired_yaw,
+            math.degrees(desired_yaw)
+        ))
+        
         # perform task
         while err_pos > self._dist_precision and success:
             # update vars
             desired_yaw = math.atan2(self._des_pos.y - self._position.y, self._des_pos.x - self._position.x)
             err_yaw = desired_yaw - self._yaw
             err_pos = math.sqrt(pow(self._des_pos.y - self._position.y, 2) + pow(self._des_pos.x - self._position.x, 2))
-            rospy.loginfo("Current Yaw: %s" % str(self._yaw))
-            rospy.loginfo("Desired Yaw: %s" % str(desired_yaw))
-            rospy.loginfo("Error Yaw: %s" % str(err_yaw))
+            rospy.loginfo(
+                "[%s] | "
+                "pos=(%.3f, %.3f) | "
+                "err_pos=%.4f m | "
+                "yaw=%.3f rad (%.1f deg) | "
+                "err_yaw=%.4f rad (%.1f deg)"
+                % (
+                    self._state.upper(),
+                    self._position.x, self._position.y,
+                    err_pos,
+                    self._yaw, math.degrees(self._yaw),
+                    err_yaw, math.degrees(err_yaw)
+                )
+            )
             # logic goes here
             if self._as.is_preempt_requested():
                 # cancelled
@@ -116,6 +134,12 @@ class WaypointActionClass(object):
         twist_msg.linear.x = 0
         twist_msg.angular.z = 0
         self._pub_cmd_vel.publish(twist_msg)
+
+        rospy.loginfo("=== GOAL CONCLUIDO ===")
+        rospy.loginfo("Final Position : X=%.4f m | Y=%.4f m" % (self._position.x, self._position.y))
+        rospy.loginfo("Error Yaw final: %.4f rad (%.2f deg)" % (err_yaw, math.degrees(err_yaw)))
+        rospy.loginfo("Err pos final  : %.4f m" % err_pos)
+        rospy.loginfo("=====================")
 
         # return success
         if success:
